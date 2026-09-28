@@ -311,7 +311,7 @@ const FIREBASE_CONFIG = {
   appId: "1:956479130980:web:201b3db099631d66babe71",
   measurementId: "G-3YHKG2TRP0"
 };
-const APP_VERSION = "v2";
+const APP_VERSION = "v3";
 window.addEventListener('error',ev=>{const st=document.getElementById('status');if(st){st.hidden=false;st.textContent='Problem ('+APP_VERSION+'): '+(ev.message||'unknown error');}});
 window.addEventListener('unhandledrejection',ev=>{const st=document.getElementById('status');if(st){st.hidden=false;st.textContent='Problem ('+APP_VERSION+'): '+((ev.reason&&(ev.reason.code||ev.reason.message))||ev.reason);}});
 /* ====================================================================== */
@@ -378,29 +378,42 @@ function handleWriteError(e){
 }
 (async function connect(){
   const st=$('#status');
-  const show=m=>{st.hidden=false;st.textContent=m;};
-  show('Connecting to your shared calendar\u2026 ('+APP_VERSION+')');
-  const slow=setTimeout(()=>{ if(store.mode!=='db') show('Still connecting ('+APP_VERSION+'). Check your internet connection, or try another browser.'); },12000);
+  const show=m=>{st.hidden=false;st.textContent=m+' ('+APP_VERSION+')';};
+  const timeout=(ms,label)=>new Promise((_,rej)=>setTimeout(()=>rej({code:'timeout',message:label}),ms));
+  show('Step 1 of 3: loading Firebase\u2026');
+  let appInst;
   try{
-    const app=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
-    fsm=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-    store.fs=fsm.getFirestore(app.initializeApp(FIREBASE_CONFIG));
-  }catch(e){ clearTimeout(slow); useLocal('Couldn\u2019t load Firebase ('+APP_VERSION+'): '+(e&&e.message||e)+'. Items are saved on this device only for now.'); return; }
+    const app=await Promise.race([import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),timeout(15000,'load')]);
+    fsm=await Promise.race([import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'),timeout(15000,'load')]);
+    appInst=app.initializeApp(FIREBASE_CONFIG);
+    store.fs=fsm.initializeFirestore(appInst,{experimentalForceLongPolling:true});
+  }catch(e){
+    useLocal(e&&e.code==='timeout'
+      ?'Step 1 failed: this browser or network is blocking Firebase (gstatic.com). Try your phone on mobile data, or pause any ad-blocker. Saving on this device only for now ('+APP_VERSION+')'
+      :'Step 1 failed: '+(e&&e.message||e)+' ('+APP_VERSION+')'); return;
+  }
+  store.root='calendars/'+calCode();
+  const evRef=fsm.collection(store.fs,store.root,'events');
+  show('Step 2 of 3: contacting your database\u2026');
   try{
-    store.root='calendars/'+calCode();
-    const evRef=fsm.collection(store.fs,store.root,'events');
-    fsm.onSnapshot(evRef,snap=>{
-      clearTimeout(slow);
-      if(store.mode!=='db'){ store.mode='db'; st.hidden=true; }
-      state.events=snap.docs.map(d=>({...d.data(),id:d.id})); render();
-    },err=>{ clearTimeout(slow); show(err.code==='permission-denied'
-        ?'Firebase refused access ('+APP_VERSION+'). Re-publish the Firestore rules from firestore.rules.'
-        :'Firebase error ('+APP_VERSION+'): '+(err.code||err.message)); });
-    fsm.onSnapshot(fsm.doc(store.fs,store.root,'settings','couple'),s=>{
-      if(s.exists() && s.data().people){ state.people=s.data().people; render(); }
-    },()=>{});
-    store.mode='db';
-  }catch(e){ clearTimeout(slow); show('Firebase error ('+APP_VERSION+'): '+(e&&e.message||e)); }
+    await Promise.race([fsm.getDocsFromServer(evRef),timeout(20000,'reach')]);
+  }catch(e){
+    const c=e&&e.code;
+    if(c==='timeout') show('Step 2 failed: can\u2019t reach Firebase\u2019s database from this browser or network. Try your phone on mobile data, a different browser, or pause any ad-blocker or VPN.');
+    else if(c==='permission-denied') show('Step 2 failed: Firebase refused access. Open Firestore \u2192 Rules, paste firestore.rules again and click Publish.');
+    else if(c==='not-found'||/not.?found|does not exist/i.test(e&&e.message||'')) show('Step 2 failed: no Firestore database found in project '+FIREBASE_CONFIG.projectId+'. Create it under Build \u2192 Firestore Database.');
+    else if(c==='failed-precondition'||c==='unimplemented') show('Step 2 failed: this database type isn\u2019t supported ('+c+'). It needs to be a Standard edition Firestore database.');
+    else show('Step 2 failed: '+(c||'')+' '+(e&&e.message||e));
+    return;
+  }
+  show('Step 3 of 3: syncing\u2026');
+  fsm.onSnapshot(evRef,snap=>{
+    store.mode='db'; st.hidden=true;
+    state.events=snap.docs.map(d=>({...d.data(),id:d.id})); render();
+  },err=>{ show(err.code==='permission-denied'?'Firebase refused access. Re-publish the Firestore rules.':'Sync error: '+(err.code||err.message)); });
+  fsm.onSnapshot(fsm.doc(store.fs,store.root,'settings','couple'),s=>{
+    if(s.exists() && s.data().people){ state.people=s.data().people; render(); }
+  },()=>{});
 })();
 $('#shareBtn').addEventListener('click',async()=>{
   const url=location.href;
