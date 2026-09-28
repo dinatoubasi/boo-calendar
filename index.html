@@ -247,15 +247,15 @@ label.f{display:flex;flex-direction:column;gap:5px;font-weight:700;font-size:.9r
 <!-- Item dialog -->
 <dialog id="itemDlg">
   <form method="dialog" id="itemForm">
-    <div class="dlg-head"><h3 id="dlgTitle">New plan</h3><button class="btn round" value="cancel" aria-label="Close">✕</button></div>
+    <div class="dlg-head"><h3 id="dlgTitle">New plan</h3><button type="button" class="btn round" data-close aria-label="Close">✕</button></div>
     <div class="dlg-body">
       <div class="types" role="group" aria-label="Type">
         <button type="button" data-type="activity" aria-pressed="true">🎈 Activity</button>
         <button type="button" data-type="reminder" aria-pressed="false">🔔 Reminder</button>
       </div>
-      <label class="f">What's happening?<input id="fTitle" required maxlength="80" placeholder="Sunset picnic at the corniche"></label>
+      <label class="f">What's happening?<input id="fTitle" maxlength="80" placeholder="Sunset picnic at the corniche"></label>
       <div class="row2">
-        <label class="f">Date<input id="fDate" type="date" required></label>
+        <label class="f">Date<input id="fDate" type="date"></label>
         <label class="f">Time (optional)<input id="fTime" type="time"></label>
       </div>
       <fieldset class="fs"><legend>Category</legend><div class="cats" id="cats"></div></fieldset>
@@ -274,16 +274,16 @@ label.f{display:flex;flex-direction:column;gap:5px;font-weight:700;font-size:.9r
     <div class="dlg-foot">
       <button type="button" class="btn danger" id="delBtn">Delete</button>
       <span style="flex:1"></span>
-      <button class="btn" value="cancel">Cancel</button>
-      <button type="button" class="btn primary" id="saveBtn">Save</button>
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" class="btn primary" id="saveBtn">Save</button>
     </div>
   </form>
 </dialog>
 
 <!-- Names dialog -->
 <dialog id="namesDlg">
-  <form method="dialog">
-    <div class="dlg-head"><h3>Who's who</h3><button class="btn round" value="cancel" aria-label="Close">✕</button></div>
+  <form method="dialog" id="namesForm">
+    <div class="dlg-head"><h3>Who's who</h3><button type="button" class="btn round" data-close aria-label="Close">✕</button></div>
     <div class="dlg-body">
       <div class="row2">
         <label class="f">Person 1 name<input id="nA" maxlength="20"></label>
@@ -294,14 +294,15 @@ label.f{display:flex;flex-direction:column;gap:5px;font-weight:700;font-size:.9r
         <label class="f">Emoji<input id="eB" maxlength="4"></label>
       </div>
     </div>
-    <div class="dlg-foot"><span style="flex:1"></span><button class="btn" value="cancel">Cancel</button><button type="button" class="btn primary" id="saveNames">Save names</button></div>
+    <div class="dlg-foot"><span style="flex:1"></span><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="saveNames">Save names</button></div>
   </form>
 </dialog>
 
 <div class="toast" id="toast" role="status"></div>
 
 <script type="module">
-const FIREBASE_CONFIG = { 
+/* ====== 1. Paste your Firebase web config here (see setup steps) ====== */
+const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC6uY50ebjyNn8VsCLV2shGZJQKEicWTgA",
   authDomain: "boo-calendar-3f434.firebaseapp.com",
   projectId: "boo-calendar-3f434",
@@ -310,6 +311,10 @@ const FIREBASE_CONFIG = {
   appId: "1:956479130980:web:201b3db099631d66babe71",
   measurementId: "G-3YHKG2TRP0"
 };
+const APP_VERSION = "v2";
+window.addEventListener('error',ev=>{const st=document.getElementById('status');if(st){st.hidden=false;st.textContent='Problem ('+APP_VERSION+'): '+(ev.message||'unknown error');}});
+window.addEventListener('unhandledrejection',ev=>{const st=document.getElementById('status');if(st){st.hidden=false;st.textContent='Problem ('+APP_VERSION+'): '+((ev.reason&&(ev.reason.code||ev.reason.message))||ev.reason);}});
+/* ====================================================================== */
 
 const CATS=[
   {id:'date',label:'Date night',e:'🍷'},{id:'trip',label:'Trip',e:'✈️'},{id:'chores',label:'Chores',e:'🧹'},
@@ -372,21 +377,30 @@ function handleWriteError(e){
   else toast('Couldn\u2019t save just now, try again');
 }
 (async function connect(){
-  if(!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey.startsWith('PASTE')){
-    useLocal('Sync isn\u2019t set up yet: add your Firebase config to index.html. Until then, items are saved on this device only.'); return;
-  }
+  const st=$('#status');
+  const show=m=>{st.hidden=false;st.textContent=m;};
+  show('Connecting to your shared calendar\u2026 ('+APP_VERSION+')');
+  const slow=setTimeout(()=>{ if(store.mode!=='db') show('Still connecting ('+APP_VERSION+'). Check your internet connection, or try another browser.'); },12000);
   try{
     const app=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
     fsm=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
     store.fs=fsm.getFirestore(app.initializeApp(FIREBASE_CONFIG));
-  }catch(e){ useLocal('Couldn\u2019t reach Firebase, so items are saved on this device only for now.'); return; }
-  store.root='calendars/'+calCode(); store.mode='db'; $('#status').hidden=true;
-  fsm.onSnapshot(fsm.collection(store.fs,store.root,'events'),snap=>{
-    state.events=snap.docs.map(d=>({...d.data(),id:d.id})); render();
-  },err=>{ const st=$('#status'); st.hidden=false; st.textContent=err.code==='permission-denied'?'Firebase refused access. Check the Firestore rules step in the setup.':'Lost connection to the shared calendar, retrying\u2026'; });
-  fsm.onSnapshot(fsm.doc(store.fs,store.root,'settings','couple'),s=>{
-    if(s.exists() && s.data().people){ state.people=s.data().people; render(); }
-  },()=>{});
+  }catch(e){ clearTimeout(slow); useLocal('Couldn\u2019t load Firebase ('+APP_VERSION+'): '+(e&&e.message||e)+'. Items are saved on this device only for now.'); return; }
+  try{
+    store.root='calendars/'+calCode();
+    const evRef=fsm.collection(store.fs,store.root,'events');
+    fsm.onSnapshot(evRef,snap=>{
+      clearTimeout(slow);
+      if(store.mode!=='db'){ store.mode='db'; st.hidden=true; }
+      state.events=snap.docs.map(d=>({...d.data(),id:d.id})); render();
+    },err=>{ clearTimeout(slow); show(err.code==='permission-denied'
+        ?'Firebase refused access ('+APP_VERSION+'). Re-publish the Firestore rules from firestore.rules.'
+        :'Firebase error ('+APP_VERSION+'): '+(err.code||err.message)); });
+    fsm.onSnapshot(fsm.doc(store.fs,store.root,'settings','couple'),s=>{
+      if(s.exists() && s.data().people){ state.people=s.data().people; render(); }
+    },()=>{});
+    store.mode='db';
+  }catch(e){ clearTimeout(slow); show('Firebase error ('+APP_VERSION+'): '+(e&&e.message||e)); }
 })();
 $('#shareBtn').addEventListener('click',async()=>{
   const url=location.href;
@@ -507,7 +521,7 @@ function openItem(id,day){
 }
 $('.types').addEventListener('click',e=>{const b=e.target.closest('[data-type]');if(b){fType=b.dataset.type;paintForm();}});
 $('#cats').addEventListener('click',e=>{const b=e.target.closest('[data-cat]');if(b){fCat=b.dataset.cat;paintForm();}});
-$('#saveBtn').addEventListener('click',async()=>{
+$('#itemForm').addEventListener('submit',async(ev0)=>{ ev0.preventDefault();
   const title=$('#fTitle').value.trim(), date=$('#fDate').value;
   if(!title){$('#fTitle').focus();toast('Give it a name first');return;}
   if(!date){$('#fDate').focus();return;}
@@ -526,13 +540,14 @@ $('#delBtn').addEventListener('click',async()=>{
 });
 
 /* names */
+$$('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
 $('#editNames').addEventListener('click',()=>{
   if(state.readOnly) return;
   $('#nA').value=nameOf('a');$('#nB').value=nameOf('b');
   $('#eA').value=state.people.a?.emoji||'';$('#eB').value=state.people.b?.emoji||'';
   $('#namesDlg').showModal();
 });
-$('#saveNames').addEventListener('click',async()=>{
+$('#namesForm').addEventListener('submit',async(ev0)=>{ ev0.preventDefault();
   const p={a:{name:$('#nA').value.trim()||'Person 1',emoji:$('#eA').value.trim()},b:{name:$('#nB').value.trim()||'Person 2',emoji:$('#eB').value.trim()}};
   $('#namesDlg').close(); state.people=p; render();
   try{await store.savePeople(p);toast('Names saved');}catch(e){handleWriteError(e)}
